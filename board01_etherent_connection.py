@@ -2,8 +2,9 @@ import socket
 import struct
 
 token_dict = {
-                0 : 'POSITION',
-                2 : 'TORQUE'
+                0  : 'POSITION',
+                1  : 'VELOCITY',
+                2  : 'TORQUE'
 }
 
 
@@ -38,6 +39,11 @@ class HelpEthernetConnection:
     def send_structured_data(self, data_tuple, structure):
         data = struct.pack(structure, *data_tuple)
         self.send_raw_data(data)
+
+    def send_parameter(self, axis, param, value):
+        data_structure_format = 'BHf'
+        send_data_tuple = (axis, param,value)
+        self.send_structured_data(send_data_tuple, data_structure_format)
 
     def get_raw_data(self, num_packets):
         messages = []
