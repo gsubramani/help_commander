@@ -7,6 +7,44 @@ token_dict = {
                 2  : 'TORQUE'
 }
 
+# parameters
+PARAMETER_CLEAR = 0
+PARAMETER_COMMIT = 1
+
+PARAMETER_POSITION_GAIN = 10 
+PARAMETER_VELOCITY_GAIN = 11
+PARAMETER_INTEGRATOR_GAIN = 12
+
+PARAMETER_INTEGRATOR_CLAMP = 13
+PARAMETER_TORQUE_CLAMP = 14
+PARAMETER_INPUT_SETPOINT = 15
+
+PARAMETER_DAMPING = 16
+PARAMETER_VELOCITY_DEADBAND = 17
+
+PARAMETER_FRICTION_FF_STATIC = 18
+PARAMETER_FRICTION_DITHER_RATE = 19
+PARAMETER_FRICTION_DITHER_BAND = 20
+PARAMETER_FRICTION_FF_KINETIC = 21
+
+
+PARAMETER_CONTROLLER_MODE = 25
+PARAMETER_INPUT_AMPLITUDE = 26
+PARAMETER_INPUT_FREQUENCY = 27
+PARAMETER_VELOCITY_LIMIT = 28    
+
+
+# modes
+MODE_IDLE                    = 0
+
+MODE_TORQUE_SIN_TRAJECTORY   = 1
+MODE_TORQUE_CONSTANT         = 2
+MODE_TORQUE_RAMP             = 3
+
+MODE_POSITION_SIN_TRAJECTORY = 11
+MODE_POSITION_CONSTANT       = 12
+MODE_POSITION_RAMP           = 13
+
 
 class HelpEthernetConnection:
     def __init__(self, ip_address_host_):
@@ -30,8 +68,9 @@ class HelpEthernetConnection:
         self.address_board01 = address
         
         print(clientMsg, ', ', clientIP)
-
         print("Connection Established")
+        
+        self.num_parameter_updates = 0;
 
     def send_raw_data(self, data):
         self.UDPServerSocket.sendto(data, self.address_board01)
@@ -41,8 +80,25 @@ class HelpEthernetConnection:
         self.send_raw_data(data)
 
     def send_parameter(self, axis, param, value):
-        data_structure_format = 'BHf'
-        send_data_tuple = (axis, param,value)
+        self.num_parameter_updates += 1;
+        
+        if param == PARAMETER_COMMIT:
+            data_structure_format = 'BHI'
+            value = self.num_parameter_updates;
+            print(value)
+            self.num_parameter_updates = 0;
+            
+        elif param == PARAMETER_CLEAR:
+            data_structure_format = 'BHI'
+            self.num_parameter_updates = 0;
+        
+        elif param == PARAMETER_CONTROLLER_MODE:
+            data_structure_format = 'BHI'
+        
+        else:    
+            data_structure_format = 'BHf'
+            
+        send_data_tuple = (axis, param, value)
         self.send_structured_data(send_data_tuple, data_structure_format)
 
     def get_raw_data(self, num_packets):
