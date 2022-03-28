@@ -21,7 +21,7 @@ hEC.send_parameter(0, PARAMETER_INPUT_SETPOINT, 0.5);
 hEC.send_parameter(0, PARAMETER_TORQUE_CLAMP, 10.0);
 
 
-some_data = hEC.get_structured_data(2000)
+some_data = hEC.get_stream_data(2000)
 hP  = HelpPlot(some_data[0]['POSITION']['samples'], some_data[0]['POSITION']['values'], row = 1, col = 1)
 hP3 = HelpPlot(some_data[0]['TORQUE']['samples'],   some_data[0]['TORQUE']['values'],   row = 2, col = 1)
 hP3 = HelpPlot(some_data[0]['VELOCITY']['samples'], some_data[0]['VELOCITY']['values'], row = 3, col = 1)

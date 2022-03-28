@@ -1,5 +1,10 @@
+from asyncio.windows_events import NULL
 import socket
 import struct
+import queue
+import threading
+from urllib import request 
+import time
 
 token_dict = {
                 0  : 'POSITION',
@@ -57,7 +62,7 @@ MAX_GENERAL_DATA_PACKET_PAYLOAD = 256
 GET_STATES_REQUEST = b"GET_STATES_REQUEST";
 
 GET_STATES_RESPONSE = b"GET_STATES_RESPONSE";              
-GET_STATES_RESPONSE_STRUCTURE = 'IL' + MAX_NUM_REQUEST_STATES*'f'            
+GET_STATES_RESPONSE_STRUCTURE = 'Iq' + MAX_NUM_REQUEST_STATES*'f'            
 
 SET_PARAMETER = b"SET_PARAMETER";
 
@@ -76,7 +81,7 @@ GENERAL_DATA_PACKET_STRUCTURE = PARAMETER_HEADER_STRUCTURE \
                               
 class HelpEthernetConnection:
     
-    def __init__(self, ip_address_host_):
+    def __init__(self, ip_address_host_, queue_packets = False):
         self.ip_address_host = ip_address_host_
         
         self.localPort = 8888
@@ -103,6 +108,16 @@ class HelpEthernetConnection:
         
         self.request_id = 0        
         self.reset_data_request()
+        if(queue_packets):
+            self.general_data_packet_queue = queue.Queue(maxsize = 1000)
+            threading.Thread(target=self.udp_listener_deamon, daemon=True).start()
+        
+    def udp_listener_deamon(self):
+        while True:
+            general_data_packet = self.parse_udp_data_from_rv1core()
+            if(self.general_data_packet_queue.full()):
+                _ = self.general_data_packet_queue.get() # remote last element in the queue for fresh data
+            self.general_data_packet_queue.put(general_data_packet)
 
     def reset_data_request(self):
         self.data_request = {}
@@ -123,7 +138,8 @@ class HelpEthernetConnection:
         self.data_request['param'][self.data_request["data_request_index"]] = param
         self.data_request["data_request_index"] +=1
 
-    def push_data_request(self):
+    def get_data_request(self, timeout = 1):
+        self.request_id +=1 # increment the request_id so all requests are mapped correctly
         num_requests = len(self.data_request['axis'])
         
         data_structure_format = 'I' # request id
@@ -142,9 +158,17 @@ class HelpEthernetConnection:
                            *tuple(self.data_request['axis']), 
                            *tuple(self.data_request['param']))
 
-        print(struct.calcsize(PARAMETER_HEADER_STRUCTURE + data_structure_format))
                 
         self.send_structured_data(send_data_tuple, PARAMETER_HEADER_STRUCTURE + data_structure_format)
+        
+        start_time = time.time()
+        while(True):
+            if(time.time() - start_time > timeout):
+                return NULL;
+            gdp = self.get_general_data_packets(1)[0]
+            if(GET_STATES_RESPONSE == gdp['name'][:len(GET_STATES_RESPONSE)]):
+                return gdp['payload']
+            
         
 
 
@@ -155,7 +179,6 @@ class HelpEthernetConnection:
         if param == PARAMETER_COMMIT:
             data_structure_format = 'BHI'
             value = self.num_parameter_updates;
-            print(value)
             self.num_parameter_updates = 0;
             
         elif param == PARAMETER_CLEAR:
@@ -173,27 +196,30 @@ class HelpEthernetConnection:
         send_data_tuple = (SET_PARAMETER ,b'computer' ,b'teensy', size_of_parameter_update_packet, axis, param, value)
         self.send_structured_data(send_data_tuple, PARAMETER_HEADER_STRUCTURE + data_structure_format)
 
-    def get_raw_data(self, num_packets):
-        messages = []
-        addresses = []
+    def get_general_data_packets(self, num_packets):
+        general_data_packets = []
         for ii in range(num_packets):
             self.bytesAddressPair = self.UDPServerSocket.recvfrom(self.bufferSize)
-            messages.append(self.bytesAddressPair[0])
-            addresses.append(self.bytesAddressPair[1])
-        return messages, addresses
+            message = self.bytesAddressPair[0]
+            general_data_packets.append(self.parse_udp_data_from_rv1core(message))
+        return general_data_packets
 
-    def parse_udp_data_from_rv1core(self):
-        # get the header first
+    def parse_udp_data_from_rv1core(self, message):
         
-        self.bytesAddressPair = self.UDPServerSocket.recvfrom(self.bufferSize)
-        # print(self.bytesAddressPair)
-        message = self.bytesAddressPair[0]
         if(len(message) < struct.calcsize(PARAMETER_HEADER_STRUCTURE)):
-            return
+            return NULL
 
         (name, source, destination, data_packet_size) = struct.unpack(PARAMETER_HEADER_STRUCTURE, message[:struct.calcsize(PARAMETER_HEADER_STRUCTURE)])
         
         payload = message[struct.calcsize(PARAMETER_HEADER_STRUCTURE): struct.calcsize(PARAMETER_HEADER_STRUCTURE) + data_packet_size]
+
+        general_data_packet = {};
+        general_data_packet['name'] = name
+        general_data_packet['source'] = source
+        general_data_packet['destination'] = destination
+        general_data_packet['data_packet_size'] = data_packet_size
+        general_data_packet['payload'] = {}
+        
 
         if(GET_STATES_RESPONSE == name[:len(GET_STATES_RESPONSE)]):
             
@@ -202,26 +228,29 @@ class HelpEthernetConnection:
             request_id = unpacked_data[0];
             time_stamp = unpacked_data[1];
             response_data = unpacked_data[2:];
-            print (request_id,time_stamp, response_data)
+            general_data_packet['payload']['request_id'] = request_id
+            general_data_packet['payload']['time_stamp'] = time_stamp
+            general_data_packet['payload']['response_data'] = response_data
+            
 
-        if(PUBLISHER  == name[:len(PUBLISHER)]):   
+        elif(PUBLISHER  == name[:len(PUBLISHER)]):   
             unpacked_data = struct.unpack(PUBLISHER_RESPONSE_STRUCTURE, payload)
                         
             axis = unpacked_data[0];
             token_type = unpacked_data[1];
             data = unpacked_data[2];
             sample = unpacked_data[3];
+            general_data_packet['payload']['axis'] = axis
+            general_data_packet['payload']['token_type'] = token_type
+            general_data_packet['payload']['data'] = data
+            general_data_packet['payload']['sample'] = sample
             
-            print (axis,token_type, data, sample)
-            
+        return general_data_packet
+    
 
+    def get_stream_data(self, num_packets):
 
-    def tag_messages(self, messages):
-        pass
-
-    def get_structured_data(self, num_packets, structure = 'BBfQ'):
-
-        (messages, _) = self.get_raw_data(num_packets)
+        general_data_packets = self.get_general_data_packets(num_packets)
 
         plot_data_list = []
         plot_data_struct = {}
@@ -229,16 +258,16 @@ class HelpEthernetConnection:
         axes = []
         token_types = []
 
-        for message in messages:
-            (axis, token_type, data, sample) = struct.unpack(structure, message)
-            plot_data = {}
-            plot_data['axis'] = axis
-            plot_data['token_type'] = token_type
-            plot_data['data'] = data
-            plot_data['sample'] = sample
-            plot_data_list.append(plot_data)
-            axes.append(axis)
-            token_types.append(token_type)
+        for gdp in general_data_packets:
+            if(PUBLISHER  == gdp['name'][:len(PUBLISHER)]):
+                plot_data = {}
+                plot_data['axis'] = gdp['payload']['axis']
+                plot_data['token_type'] = gdp['payload']['token_type']
+                plot_data['data'] = gdp['payload']['data']
+                plot_data['sample'] = gdp['payload']['sample']
+                plot_data_list.append(plot_data)
+                axes.append(plot_data['axis'])
+                token_types.append(plot_data['token_type'])
 
         axes = set(axes)
         token_types = set(token_types)
