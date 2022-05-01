@@ -36,12 +36,29 @@ PARAMETER_FRICTION_FF_KINETIC = 21
 PARAMETER_CONTROLLER_MODE = 25
 PARAMETER_INPUT_AMPLITUDE = 26
 PARAMETER_INPUT_FREQUENCY = 27
-PARAMETER_VELOCITY_LIMIT = 28    
+PARAMETER_VELOCITY_LIMIT = 28  
+PARAMETER_VELOCITY_FILTER_GAIN = 29    
 
+
+PARAMETER_POSITION_FILTER_NUM_COEF = 30
+PARAMETER_POSITION_FILTER_DEN_COEF = 31
+
+PARAMETER_VELOCITY_FILTER_NUM_COEF = 32
+PARAMETER_VELOCITY_FILTER_DEN_COEF = 33
+
+PARAMETER_COGGING_FF_TORQUE = 34
+
+
+PARAMETER_CONTROLLER_ACTION = 50
 
 STATE_POSITION   = 101
 STATE_VELOCITY   = 102
 STATE_TORQUE     = 103
+
+STATE_POSITION_ESTIMATE     = 104
+STATE_VELOCITY_ESTIMATE     = 105
+
+
 
 # modes
 MODE_IDLE                    = 0
@@ -53,6 +70,12 @@ MODE_TORQUE_RAMP             = 3
 MODE_POSITION_SIN_TRAJECTORY = 11
 MODE_POSITION_CONSTANT       = 12
 MODE_POSITION_RAMP           = 13
+
+
+ACTION_IDLE                 = 0
+ACTION_SET_POSITION_FILTER  = 100
+
+
 
 CSTRING_TOKEN_SIZE = 32
 MAX_NUM_REQUEST_STATES =  32
@@ -160,7 +183,7 @@ class HelpEthernetConnection:
 
                 
         self.send_structured_data(send_data_tuple, PARAMETER_HEADER_STRUCTURE + data_structure_format)
-        
+        self.reset_data_request()
         start_time = time.time()
         while(True):
             if(time.time() - start_time > timeout):
@@ -172,29 +195,39 @@ class HelpEthernetConnection:
         
 
 
-    def send_parameter(self, axis, param, value):
+    def send_parameter(self, axis, param, index, value, timeout = 1, retries = 3):
         
         self.num_parameter_updates += 1;
         
         if param == PARAMETER_COMMIT:
-            data_structure_format = 'BHI'
+            data_structure_format = 'IIHI'
             value = self.num_parameter_updates;
             self.num_parameter_updates = 0;
             
         elif param == PARAMETER_CLEAR:
-            data_structure_format = 'BHI'
+            data_structure_format = 'IIHI'
             self.num_parameter_updates = 0;
         
         elif param == PARAMETER_CONTROLLER_MODE:
-            data_structure_format = 'BHI'
+            data_structure_format = 'IIHI'
         
         else:    
-            data_structure_format = 'BHf'
+            data_structure_format = 'IIHf'
         
         size_of_parameter_update_packet = struct.calcsize(data_structure_format)
             
-        send_data_tuple = (SET_PARAMETER ,b'computer' ,b'teensy', size_of_parameter_update_packet, axis, param, value)
-        self.send_structured_data(send_data_tuple, PARAMETER_HEADER_STRUCTURE + data_structure_format)
+        send_data_tuple = (SET_PARAMETER ,b'computer' ,b'teensy', size_of_parameter_update_packet, axis, index, param, value)
+        
+        for attempt in range(retries):
+            self.send_structured_data(send_data_tuple, PARAMETER_HEADER_STRUCTURE + data_structure_format)
+            start_time = time.time()
+            while(True):
+                if(time.time() - start_time > timeout):
+                    break;
+                gdp = self.get_general_data_packets(1)[0]
+                if(SET_PARAMETER == gdp['name'][:len(SET_PARAMETER)]):
+                    return 
+        raise( "Parameter could not successfully be sent!" )
 
     def get_general_data_packets(self, num_packets):
         general_data_packets = []
@@ -248,8 +281,10 @@ class HelpEthernetConnection:
         return general_data_packet
     
 
-    def get_stream_data(self, num_packets):
+    def get_stream_data(self, num_packets, clear_old = True):
 
+        if(clear_old):
+            self.get_general_data_packets(2000)
         general_data_packets = self.get_general_data_packets(num_packets)
 
         plot_data_list = []
